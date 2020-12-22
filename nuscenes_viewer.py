@@ -107,6 +107,15 @@ if __name__ == "__main__":
         plt.xlabel("y [m]")
         plt.ylabel("x(forward) [m]")
         plt.scatter(-radar_point[:,1], radar_point[:,0], color = "black", s = scatter_size)
+        
+        for data in annotations[token_index]["annotations"]:
+            if not (data["label"] in class_to_color):
+                continue
+            color = class_to_color[data["label"]]
+            corner = data["bev_box"]
+            for i_corner in range(4):
+                plt.plot([-corner[1][i_corner], -corner[1][(i_corner+1)%4]], [corner[0][i_corner], corner[0][(i_corner+1)%4]], 'k-', c = np.concatenate([color, [1]]))  
+        
         bev_im_buf = io.BytesIO()
         plt.savefig(bev_im_buf, format='png', bbox_inches='tight')
         bev_im = cv2.imdecode(np.frombuffer(bev_im_buf.getvalue(), dtype=np.uint8), 1)
