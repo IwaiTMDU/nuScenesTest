@@ -2,6 +2,7 @@ from nuscenes.nuscenes import NuScenes
 import numpy as np
 import os
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 from tqdm import tqdm
 import open3d as o3d
 import cv2
@@ -22,7 +23,7 @@ class_to_color = {
 
 def put_bbox_into_image(annotation):
     font                   = cv2.FONT_HERSHEY_SIMPLEX
-    fontScale              = 0.4
+    fontScale              = 1.0
 
     image = cv2.imread(annotation["image_file"])
     for data in annotation["annotations"]:
@@ -31,7 +32,12 @@ def put_bbox_into_image(annotation):
         (x1, y1, x2, y2) = data["box"].astype(np.int32)
         color =class_to_color[data["label"]] * 255
         cv2.rectangle(image,(x1, y1), (x2, y2), color,2)
+        (retval,baseLine) = cv2.getTextSize(data["label"], font, fontScale,1)
+        textOrg = int(x1), int(y1)
 
+        cv2.rectangle(image, (textOrg[0] - 1,textOrg[1]+baseLine - 1), (textOrg[0]+retval[0] + 1, textOrg[1]-retval[1] - 1), color, -1)
+        cv2.putText(image, data["label"], textOrg, cv2.FONT_HERSHEY_SIMPLEX, fontScale, (1,1,1), 1)
+    
     return image
 
 def get_annotation_bbox(nusc, tokens):
@@ -100,6 +106,11 @@ if __name__ == "__main__":
     # BEV
     plt.figure(1)
     scatter_size = 5
+    legends = []
+    for label in class_to_color.keys():
+        color = class_to_color[label]
+        legends.append(mpatches.Patch(color=np.concatenate([color, [1]]), label=label))
+
     for token_index in tqdm(range(len(sample_tokens))):
         radar_point = radar_points[token_index]
 
@@ -117,12 +128,14 @@ if __name__ == "__main__":
                 plt.plot([-corner[1][i_corner], -corner[1][(i_corner+1)%4]], [corner[0][i_corner], corner[0][(i_corner+1)%4]], 'k-', c = np.concatenate([color, [1]]))  
         
         bev_im_buf = io.BytesIO()
+        plt.legend(handles=legends, bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0, fontsize=18)
         plt.savefig(bev_im_buf, format='png', bbox_inches='tight')
         bev_im = cv2.imdecode(np.frombuffer(bev_im_buf.getvalue(), dtype=np.uint8), 1)
         bev_im = bev_im[:,:,::-1]
+
         cam_img = put_bbox_into_image(annotations[token_index])
-        cam_img = cv2.resize(cam_img, (640, 320))
-        asp = bev_im.shape[0] / cam_img.shape[0]
+        #cam_img = cv2.resize(cam_img, (640, 320))
+        asp = cam_img.shape[0]/bev_im.shape[0]
         bev_im = cv2.resize(bev_im, dsize=(round(asp*bev_im.shape[1]), cam_img.shape[0]))
         out_img = cv2.hconcat([cam_img, bev_im])
         cv2.imwrite(os.path.join(save_dir, str(token_index).zfill(4)+".png"), out_img)
