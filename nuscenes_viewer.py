@@ -7,6 +7,7 @@ from tqdm import tqdm
 import open3d as o3d
 import cv2
 import io
+from PIL import Image
 
 
 dataroot = "v1.0-mini"
@@ -102,6 +103,7 @@ if __name__ == "__main__":
 
     annotations = get_annotation_bbox(nusc, sample_tokens)
     radar_points = get_radar_points(nusc, sample_tokens)
+    out_imgs = []
 
     # BEV
     plt.figure(1)
@@ -134,8 +136,11 @@ if __name__ == "__main__":
         bev_im = bev_im[:,:,::-1]
 
         cam_img = put_bbox_into_image(annotations[token_index])
-        #cam_img = cv2.resize(cam_img, (640, 320))
+        cam_img = cv2.resize(cam_img, (720, 405))
         asp = cam_img.shape[0]/bev_im.shape[0]
         bev_im = cv2.resize(bev_im, dsize=(round(asp*bev_im.shape[1]), cam_img.shape[0]))
         out_img = cv2.hconcat([cam_img, bev_im])
         cv2.imwrite(os.path.join(save_dir, str(token_index).zfill(4)+".png"), out_img)
+        out_imgs.append(Image.fromarray(np.uint8(out_img)))
+
+    out_imgs[0].save('nuscenes_imgs.gif', save_all=True, append_images=out_imgs[1:], duration=500)
