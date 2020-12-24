@@ -196,7 +196,7 @@ if __name__ == "__main__":
 
     # BEV
     plt.figure(1)
-    scatter_size = 5
+    scatter_size = 10
     legends = []
     for label in class_to_color.keys():
         color = class_to_color[label]
@@ -226,7 +226,7 @@ if __name__ == "__main__":
         for data in annotations[token_index]["annotations"]:
             if not (data["label"] in class_to_color):
                 continue
-            color = class_to_color[data["label"]]
+            color = class_to_color[data["label"]][::-1]
             corner = data["bev_box"]
             for i_corner in range(4):
                 plt.plot([-corner[1][i_corner], -corner[1][(i_corner+1)%4]], [corner[0][i_corner], corner[0][(i_corner+1)%4]], 'k-', c = np.concatenate([color, [1]]))  
@@ -235,14 +235,14 @@ if __name__ == "__main__":
         #plt.legend(handles=legends, bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0, fontsize=18)
         plt.savefig(bev_im_buf, format='png', bbox_inches='tight')
         bev_im = cv2.imdecode(np.frombuffer(bev_im_buf.getvalue(), dtype=np.uint8), 1)
-        bev_im = bev_im[:,:,::-1]
 
         cam_img = put_bbox_into_image(annotations[token_index])
-        cam_img = cv2.resize(cam_img, (720, 405))
         asp = cam_img.shape[0]/bev_im.shape[0]
         bev_im = cv2.resize(bev_im, dsize=(round(asp*bev_im.shape[1]), cam_img.shape[0]))
         out_img = cv2.hconcat([cam_img, bev_im])
         cv2.imwrite(os.path.join(save_dir, str(token_index).zfill(4)+".png"), out_img)
-        out_imgs.append(Image.fromarray(np.uint8(out_img)))
+        
+        out_img = cv2.resize(out_img, (720, 405))
+        out_imgs.append(Image.fromarray(np.uint8(out_img[:,:,::-1])))
 
     out_imgs[0].save('nuscenes_imgs.gif', save_all=True, append_images=out_imgs[1:], duration=500)
