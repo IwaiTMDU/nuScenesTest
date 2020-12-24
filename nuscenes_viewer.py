@@ -219,6 +219,16 @@ if __name__ == "__main__":
         rcs_colors = np.concatenate([rcs_colors, 255*np.ones((rcs_colors.shape[0],1))], 1)
         plt.scatter(-radar_point[1,:], radar_point[0,:], c = rcs_colors.astype(np.float)/255.0, s = scatter_size)
 
+        for point_idx in range(radar_point.shape[1]):
+            vx_vy_comp = radar_meta_data[token_index][5:7,point_idx]
+            vx_vy_comp = vx_vy_comp/(np.linalg.norm(vx_vy_comp)+1e-5)*5
+            
+            plt.annotate('', xy=(-radar_point[1,point_idx]-vx_vy_comp[1], radar_point[0,point_idx]+vx_vy_comp[0]), xytext=(-radar_point[1,point_idx], radar_point[0,point_idx]),
+                    arrowprops=dict(shrink=0, width=0.2, headwidth=1, 
+                                    headlength=1, connectionstyle='arc3',
+                                    facecolor='gray', edgecolor='gray')
+                )
+        
         for data in annotations[token_index]["annotations"]:
             if not (data["label"] in class_to_color):
                 continue
