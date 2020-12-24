@@ -204,11 +204,20 @@ if __name__ == "__main__":
 
     for token_index in tqdm(range(len(sample_tokens))):
         radar_point = radar_points[token_index]
+        rcs_positive = np.power(10, radar_meta_data[token_index][2,:]/20.0)
+        max_rcs = np.max(rcs_positive)
 
         plt.clf()
         plt.xlabel("y [m]")
         plt.ylabel("x(forward) [m]")
-        plt.scatter(-radar_point[:,1], radar_point[:,0], color = "black", s = scatter_size)
+        rcs_hue = 120*(max_rcs - rcs_positive).astype(np.uint8)
+        rcs_hsv = 255*np.ones((rcs_hue.shape[0], 3)).astype(np.uint8)
+        rcs_hsv[:,0] = rcs_hue
+        
+        rcs_colors = np.array([cv2.cvtColor(np.array([[rcs_hsv[point_idx]]], dtype=np.uint8), cv2.COLOR_HSV2RGB) for point_idx in range(rcs_hsv.shape[0])])
+        rcs_colors = np.reshape(rcs_colors, (rcs_colors.shape[0],3))
+        rcs_colors = np.concatenate([rcs_colors, 255*np.ones((rcs_colors.shape[0],1))], 1)
+        plt.scatter(-radar_point[1,:], radar_point[0,:], c = rcs_colors.astype(np.float)/255.0, s = scatter_size)
 
         for data in annotations[token_index]["annotations"]:
             if not (data["label"] in class_to_color):
