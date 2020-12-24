@@ -1,4 +1,5 @@
 from nuscenes.nuscenes import NuScenes
+from nuscenes.utils.data_classes import RadarPointCloud
 import numpy as np
 import os
 import matplotlib.pyplot as plt
@@ -69,16 +70,103 @@ def get_annotation_bbox(nusc, tokens):
 
 
 def get_radar_points(nusc, tokens):
+    '''
+        RADAR pcd file:
+            VERSION 0.7
+            FIELDS x y z dyn_prop id rcs vx vy vx_comp vy_comp is_quality_valid ambig_state x_rms y_rms invalid_state pdh0 vx_rms vy_rms
+            SIZE 4 4 4 1 2 4 4 4 4 4 1 1 1 1 1 1 1 1
+            TYPE F F F I I F F F F F I I I I I I I I
+            COUNT 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
+            WIDTH 125
+            HEIGHT 1
+            VIEWPOINT 0 0 0 1 0 0 0
+            POINTS 125
+            DATA binary
+            Below some of the fields are explained in more detail:
+            x is front, y is left
+            vx, vy are the velocities in m/s.
+            vx_comp, vy_comp are the velocities in m/s compensated by the ego motion.
+            We recommend using the compensated velocities.
+            invalid_state: state of Cluster validity state.
+            (Invalid states)
+            0x01	invalid due to low RCS
+            0x02	invalid due to near-field artefact
+            0x03	invalid far range cluster because not confirmed in near range
+            0x05	reserved
+            0x06	invalid cluster due to high mirror probability
+            0x07	Invalid cluster because outside sensor field of view
+            0x0d	reserved
+            0x0e	invalid cluster because it is a harmonics
+            (Valid states)
+            0x00	valid
+            0x04	valid cluster with low RCS
+            0x08	valid cluster with azimuth correction due to elevation
+            0x09	valid cluster with high child probability
+            0x0a	valid cluster with high probability of being a 50 deg artefact
+            0x0b	valid cluster but no local maximum
+            0x0c	valid cluster with high artefact probability
+            0x0f	valid cluster with above 95m in near range
+            0x10	valid cluster with high multi-target probability
+            0x11	valid cluster with suspicious angle
+            dynProp: Dynamic property of cluster to indicate if is moving or not.
+            0: moving
+            1: stationary
+            2: oncoming
+            3: stationary candidate
+            4: unknown
+            5: crossing stationary
+            6: crossing moving
+            7: stopped
+            ambig_state: State of Doppler (radial velocity) ambiguity solution.
+            0: invalid
+            1: ambiguous
+            2: staggered ramp
+            3: unambiguous
+            4: stationary candidates
+            pdh0: False alarm probability of cluster (i.e. probability of being an artefact caused by multipath or similar).
+            0: invalid
+            1: <25%
+            2: 50%
+            3: 75%
+            4: 90%
+            5: 99%
+            6: 99.9%
+            7: <=100%
+        returns:
+            radar_points
+                - Shape: len(tokens) x 3(xyz) x num points
+            radar_meta_data
+                - Shape: len(tokens) x 15 x num points
+                - Semantics:
+                    [0]: dyn_prop
+                    [1]: id
+                    [2]: rcs
+                    [3]: vx
+                    [4]: vy
+                    [5]: vx_comp
+                    [6]: vy_comp
+                    [7]: is_quality_valid
+                    [8]: ambig_state
+                    [9]: x_rms
+                    [10]: y_rms
+                    [11]: invalid_state
+                    [12]: pdh0
+                    [13]: vx_rms
+                    [14]: vy_rms
+    '''
     radar_points = []
+    radar_meta_data = []
     for token_index in tqdm(range(len(tokens))):
         token = tokens[token_index]
         sample = nusc.get('sample', token)
-        radar_data = nusc.get('sample_data', sample['data']["RADAR_FRONT"])
-        pcd = o3d.io.read_point_cloud(os.path.join(dataroot, radar_data['filename']))
-        np_pcd = np.array(pcd.points)
-        radar_points.append(np_pcd)
+        radar_sample = nusc.get('sample_data', sample['data']["RADAR_FRONT"])
+        radar_data = RadarPointCloud.from_file(os.path.join(dataroot, radar_sample['filename']))
+        radar_xyz = radar_data.points[:3,:]
+        radar_meta = radar_data.points[3:,:]
+        radar_points.append(radar_xyz)
+        radar_meta_data.append(radar_meta)
 
-    return radar_points
+    return radar_points, radar_meta_data
 
 if __name__ == "__main__":
     nusc = NuScenes(version = "v1.0-mini", dataroot = dataroot, verbose=False)
@@ -102,7 +190,8 @@ if __name__ == "__main__":
             prog += 1
 
     annotations = get_annotation_bbox(nusc, sample_tokens)
-    radar_points = get_radar_points(nusc, sample_tokens)
+    radar_points, radar_meta_data = get_radar_points(nusc, sample_tokens)
+    
     out_imgs = []
 
     # BEV
@@ -120,7 +209,7 @@ if __name__ == "__main__":
         plt.xlabel("y [m]")
         plt.ylabel("x(forward) [m]")
         plt.scatter(-radar_point[:,1], radar_point[:,0], color = "black", s = scatter_size)
-        
+
         for data in annotations[token_index]["annotations"]:
             if not (data["label"] in class_to_color):
                 continue
@@ -130,7 +219,7 @@ if __name__ == "__main__":
                 plt.plot([-corner[1][i_corner], -corner[1][(i_corner+1)%4]], [corner[0][i_corner], corner[0][(i_corner+1)%4]], 'k-', c = np.concatenate([color, [1]]))  
         
         bev_im_buf = io.BytesIO()
-        plt.legend(handles=legends, bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0, fontsize=18)
+        #plt.legend(handles=legends, bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0, fontsize=18)
         plt.savefig(bev_im_buf, format='png', bbox_inches='tight')
         bev_im = cv2.imdecode(np.frombuffer(bev_im_buf.getvalue(), dtype=np.uint8), 1)
         bev_im = bev_im[:,:,::-1]
