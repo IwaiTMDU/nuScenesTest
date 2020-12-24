@@ -202,6 +202,8 @@ if __name__ == "__main__":
         color = class_to_color[label]
         legends.append(mpatches.Patch(color=np.concatenate([color, [1]]), label=label))
 
+    out_vid_shape = (720, 405)
+    out_vid = cv2.VideoWriter("result.mp4", cv2.VideoWriter_fourcc(*'mp4v'), 2, out_vid_shape)
     for token_index in tqdm(range(len(sample_tokens))):
         radar_point = radar_points[token_index]
         rcs_positive = np.power(10, radar_meta_data[token_index][2,:]/20.0)
@@ -229,7 +231,7 @@ if __name__ == "__main__":
             color = class_to_color[data["label"]][::-1]
             corner = data["bev_box"]
             for i_corner in range(4):
-                plt.plot([-corner[1][i_corner], -corner[1][(i_corner+1)%4]], [corner[0][i_corner], corner[0][(i_corner+1)%4]], 'k-', c = np.concatenate([color, [1]]))  
+                plt.plot([-corner[1][i_corner], -corner[1][(i_corner+1)%4]], [corner[0][i_corner], corner[0][(i_corner+1)%4]], 'k-', c = np.concatenate([color, [1]]), linewidth = 0.7)  
         
         bev_im_buf = io.BytesIO()
         #plt.legend(handles=legends, bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0, fontsize=18)
@@ -242,7 +244,7 @@ if __name__ == "__main__":
         out_img = cv2.hconcat([cam_img, bev_im])
         cv2.imwrite(os.path.join(save_dir, str(token_index).zfill(4)+".png"), out_img)
         
-        out_img = cv2.resize(out_img, (720, 405))
-        out_imgs.append(Image.fromarray(np.uint8(out_img[:,:,::-1])))
+        out_img = cv2.resize(out_img, out_vid_shape)
+        out_vid.write(out_img)
 
-    out_imgs[0].save('nuscenes_imgs.gif', save_all=True, append_images=out_imgs[1:], duration=500)
+    out_vid.release()
