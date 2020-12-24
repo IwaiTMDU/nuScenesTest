@@ -219,9 +219,9 @@ if __name__ == "__main__":
         rcs_colors = np.concatenate([rcs_colors, 255*np.ones((rcs_colors.shape[0],1))], 1)
         plt.scatter(-radar_point[1,:], radar_point[0,:], c = rcs_colors.astype(np.float)/255.0, s = scatter_size)
 
-        vx_vy_comp = radar_meta_data[token_index][5:7,:]
-        vx_vy_comp = vx_vy_comp/(np.linalg.norm(vx_vy_comp, axis=0)+1e-5)*5
-        plt.plot([-radar_point[1,:], -radar_point[1,:]-vx_vy_comp[1,:]], [radar_point[0,:], radar_point[0,:]+vx_vy_comp[0,:]], 'k-', color="red", linewidth = 0.5)
+        vx_vy_comp = radar_meta_data[token_index][5:7,:]*4
+        #vx_vy_comp = vx_vy_comp/(np.linalg.norm(vx_vy_comp, axis=0)+1e-5)*5
+        plt.plot([-radar_point[1,:], -radar_point[1,:]-vx_vy_comp[1,:]], [radar_point[0,:], radar_point[0,:]+vx_vy_comp[0,:]], 'k-', color="r", linewidth = 0.5)
         
         for data in annotations[token_index]["annotations"]:
             if not (data["label"] in class_to_color):
