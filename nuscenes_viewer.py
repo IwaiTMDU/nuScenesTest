@@ -12,16 +12,34 @@ from PIL import Image
 
 
 dataroot = "v1.0-mini"
-class_to_color = {
-        'bg': np.array([0, 0, 0])/255,
-        'human.pedestrian.adult': np.array([34, 114, 227]) / 255,
-        'vehicle.bicycle': np.array([0, 182, 0])/255,
-        'vehicle.bus': np.array([84, 1, 71])/255,
-        'vehicle.car': np.array([189, 101, 0]) / 255,
-        'vehicle.motorcycle': np.array([159, 157,156])/255,
-        'vehicle.trailer': np.array([0, 173, 162])/255,
-        'vehicle.truck': np.array([89, 51, 0])/255,
-        }
+class_names = [
+    'bg' ,
+    'animal',
+    'human.pedestrian.adult',
+    'human.pedestrian.child',
+    'human.pedestrian.construction_worker',
+    'human.pedestrian.personal_mobility',
+    'human.pedestrian.police_officer',
+    'human.pedestrian.stroller',
+    'human.pedestrian.wheelchair',
+    'movable_object.barrier',
+    'movable_object.debris',
+    'movable_object.pushable_pullable',
+    'movable_object.trafficcone',
+    'static_object.bicycle_rack *',
+    'vehicle.bicycle',
+    'vehicle.bus.bendy',
+    'vehicle.bus.rigid',
+    'vehicle.car',
+    'vehicle.construction',
+    'vehicle.emergency.ambulance',
+    'vehicle.emergency.police',
+    'vehicle.motorcycle',
+    'vehicle.trailer',
+    'vehicle.truck'
+]
+
+class_to_color = {}
 
 def put_bbox_into_image(annotation):
     font                   = cv2.FONT_HERSHEY_SIMPLEX
@@ -34,11 +52,12 @@ def put_bbox_into_image(annotation):
         (x1, y1, x2, y2) = data["box"].astype(np.int32)
         color =class_to_color[data["label"]] * 255
         cv2.rectangle(image,(x1, y1), (x2, y2), color,2)
-        (retval,baseLine) = cv2.getTextSize(data["label"], font, fontScale,1)
+        put_class_label = data["label"].split('.')[-1]
+        (retval,baseLine) = cv2.getTextSize(put_class_label, font, fontScale,1)
         textOrg = int(x1), int(y1)
 
         cv2.rectangle(image, (textOrg[0] - 1,textOrg[1]+baseLine - 1), (textOrg[0]+retval[0] + 1, textOrg[1]-retval[1] - 1), color, -1)
-        cv2.putText(image, data["label"], textOrg, cv2.FONT_HERSHEY_SIMPLEX, fontScale, (1,1,1), 1)
+        cv2.putText(image, put_class_label, textOrg, cv2.FONT_HERSHEY_SIMPLEX, fontScale, (1,1,1), 1)
     
     return image
 
@@ -175,6 +194,14 @@ if __name__ == "__main__":
     prog = 0
     save_dir = "result"
     os.makedirs(save_dir, exist_ok=True)
+
+    # Assign color
+    class_to_color['bg'] = np.zeros(3)
+    for class_id, class_name in enumerate(class_names):
+        class_color_hsv = 255*np.ones(3).astype(np.uint8)
+        class_color_hsv[0] = np.uint8(float(class_id) / len(class_names) * 120)
+        class_to_color[class_name] = cv2.cvtColor(np.array([[class_color_hsv]], dtype=np.uint8), cv2.COLOR_HSV2BGR)/255.0
+        class_to_color[class_name] = class_to_color[class_name].reshape(3)
     
     # Get all tokens
     for scene_index in range(scene_num):
@@ -202,7 +229,7 @@ if __name__ == "__main__":
         color = class_to_color[label]
         legends.append(mpatches.Patch(color=np.concatenate([color, [1]]), label=label))
 
-    out_vid_shape = (720, 405)
+    out_vid_shape = (1440, 405)
     out_vid = cv2.VideoWriter("result.mp4", cv2.VideoWriter_fourcc(*'mp4v'), 2, out_vid_shape)
     for token_index in tqdm(range(len(sample_tokens))):
         radar_point = radar_points[token_index]
@@ -235,14 +262,14 @@ if __name__ == "__main__":
         
         bev_im_buf = io.BytesIO()
         #plt.legend(handles=legends, bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0, fontsize=18)
-        plt.savefig(bev_im_buf, format='png', bbox_inches='tight')
+        plt.savefig(bev_im_buf, format='jpg', bbox_inches='tight')
         bev_im = cv2.imdecode(np.frombuffer(bev_im_buf.getvalue(), dtype=np.uint8), 1)
 
         cam_img = put_bbox_into_image(annotations[token_index])
         asp = cam_img.shape[0]/bev_im.shape[0]
         bev_im = cv2.resize(bev_im, dsize=(round(asp*bev_im.shape[1]), cam_img.shape[0]))
         out_img = cv2.hconcat([cam_img, bev_im])
-        cv2.imwrite(os.path.join(save_dir, str(token_index).zfill(4)+".png"), out_img)
+        cv2.imwrite(os.path.join(save_dir, str(token_index).zfill(4)+".jpg"), out_img)
         
         out_img = cv2.resize(out_img, out_vid_shape)
         out_vid.write(out_img)
