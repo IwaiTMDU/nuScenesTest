@@ -60,7 +60,7 @@ class_names = [
 
 class_to_color = {}
 
-def put_bbox_into_image(annotation, radar_in_image = None, rcs_colors = None):
+def put_bbox_into_image(annotation, radar_in_image = None, selected_point_ids = None, rcs_colors = None):
     font                   = cv2.FONT_HERSHEY_SIMPLEX
     fontScale              = 1.0
 
@@ -89,7 +89,11 @@ def put_bbox_into_image(annotation, radar_in_image = None, rcs_colors = None):
             point_color = rcs_colors[token_index][point_index]
             point_color = (int(point_color[0]), int(point_color[1]), int(point_color[2]))
             if ((0 <= u <= image.shape[1]) and (0 <= v <= image.shape[0])): # point is in the image
-                cv2.circle(image, (u, v), 6, color = point_color, thickness = -1, lineType = cv2.LINE_8)
+                if point_index in selected_point_ids:
+                    cv2.circle(image, (u, v), 12, color = point_color, thickness = -1, lineType = cv2.LINE_8)    
+                    cv2.circle(image, (u, v), 6, color = [0, 0, 0, 0], thickness = -1, lineType = cv2.LINE_8)
+                else:
+                    cv2.circle(image, (u, v), 6, color = point_color, thickness = -1, lineType = cv2.LINE_8)
 
     return image
 
@@ -296,6 +300,13 @@ if __name__ == "__main__":
     save_dir = "result"
     os.makedirs(save_dir, exist_ok=True)
     distance_errors = []
+    distance_labels = []
+    distance_centers = []
+    distance_files = []
+    distance_dist=[]
+    distance_phd0 = []
+    error_of_1file = []
+    best_files = []
 
     # Assign color
     class_to_color['bg'] = np.zeros(3)
@@ -347,8 +358,8 @@ if __name__ == "__main__":
 
         vx_vy_comp = radar_meta_data[token_index][5:7,:]*4
         #vx_vy_comp = vx_vy_comp/(np.linalg.norm(vx_vy_comp, axis=0)+1e-5)*5
-        plt.plot([-radar_point[1,:], -radar_point[1,:]-vx_vy_comp[1,:]], [radar_point[0,:], radar_point[0,:]+vx_vy_comp[0,:]], 'k-', color="r", linewidth = 0.5)
-        
+        #plt.plot([-radar_point[1,:], -radar_point[1,:]-vx_vy_comp[1,:]], [radar_point[0,:], radar_point[0,:]+vx_vy_comp[0,:]], 'k-', color="r", linewidth = 0.5)
+        selected_point_ids = []
         for data in annotations[token_index]["annotations"]:
             if not (data["label"] in class_to_color):
                 continue
@@ -361,22 +372,32 @@ if __name__ == "__main__":
             if len(radar_indexes) > 0:
                 np_points = np.array(radar_point[:,radar_indexes])
                 dists = np.linalg.norm(np_points, axis=0)
-                if False:
+                if True:
                     dist = dists.min()
                 else:
                     dist = dists.mean()
                 data["distance"] = dist
-                gt_dist = np.linalg.norm(data["bev_box"])
-                distance_errors.append(gt_dist - data["distance"])
-
+                selected_point_id = dists.argmin()
+                selected_point = np_points[:,selected_point_id]
+                selected_point_ids.append(radar_indexes[selected_point_id])
+                gt_center = data["bev_box"].mean(axis=1)
+                gt_dist = np.linalg.norm(gt_center)
+                distance_errors.append(np.abs(gt_dist - dist))
+                distance_labels.append(data["label"])
+                distance_centers.append(gt_center)
+                distance_files.append(token_index)
+                distance_dist.append(dist)
+                distance_phd0.append(radar_meta_data[token_index][12][radar_indexes])
+                plt.plot([-gt_center[1], -selected_point[1]], [gt_center[0], selected_point[0]],'k-', c = np.concatenate([color, [1]]), linewidth = 1.5)
                 plt.scatter(-radar_point[1,radar_indexes], radar_point[0,radar_indexes], c = [color], s = scatter_size)
-
+        error_of_1file.append(np.mean(distance_errors))
+        best_files.append(token_index)
         bev_im_buf = io.BytesIO()
         #plt.legend(handles=legends, bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0, fontsize=18)
         plt.savefig(bev_im_buf, format='jpg', bbox_inches='tight')
         bev_im = cv2.imdecode(np.frombuffer(bev_im_buf.getvalue(), dtype=np.uint8), 1)
 
-        cam_img = put_bbox_into_image(annotations[token_index], radar_in_image=radar_in_image[token_index], rcs_colors = rcs_colors)
+        cam_img = put_bbox_into_image(annotations[token_index], radar_in_image=radar_in_image[token_index], selected_point_ids=selected_point_ids, rcs_colors = rcs_colors)
         asp = cam_img.shape[0]/bev_im.shape[0]
         bev_im = cv2.resize(bev_im, dsize=(round(asp*bev_im.shape[1]), cam_img.shape[0]))
         out_img = cv2.hconcat([cam_img, bev_im])
@@ -386,4 +407,17 @@ if __name__ == "__main__":
         out_vid.write(out_img)
 
     out_vid.release()
-    print("MAE: {}, std: {}".format(np.abs(distance_errors).mean(), np.std(np.abs(distance_errors))))
+    print("MAE: {}, std: {}".format(np.mean(distance_errors), np.std(distance_errors)))
+
+    dis_label = sorted(zip(error_of_1file, best_files))
+    topk = 20
+    best, files = zip(*dis_label)
+    print("Best dist {}".format(best[:topk]))
+    print("Best file {}".format(files[:topk]))
+
+    dis_label = sorted(zip(distance_errors, distance_labels, distance_files, distance_centers, distance_dist, distance_phd0))
+    worst, labels, files, centers, dists, phd0s = zip(*dis_label)
+    topk = 10
+    print("Worst error {}".format(worst[::-1][:topk]))
+    print("Worst file {}".format(files[::-1][:topk]))
+    print("Worst center {}".format(centers[::-1][:topk]))
