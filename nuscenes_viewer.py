@@ -4,6 +4,7 @@ from nuscenes.utils.geometry_utils import view_points
 import numpy as np
 import os
 import matplotlib.pyplot as plt
+import matplotlib.patches as pat
 import matplotlib.patches as mpatches
 from tqdm import tqdm
 import open3d as o3d
@@ -12,9 +13,11 @@ import io
 from PIL import Image
 from pyquaternion import Quaternion
 import copy
+from nuscenes.utils.geometry_utils import BoxVisibility
 
 
 dataroot = "v1.0-mini"
+box_visibility = BoxVisibility.ANY
 '''
 class_names = [
     'bg' ,
@@ -98,7 +101,6 @@ def put_bbox_into_image(annotation, radar_in_image = None, selected_point_ids = 
     return image
 
 def get_annotation_bbox(nusc, tokens):
-    from nuscenes.utils.geometry_utils import BoxVisibility
     annotations = []
     for token_index in tqdm(range(len(tokens))):
         token = tokens[token_index]
@@ -108,7 +110,7 @@ def get_annotation_bbox(nusc, tokens):
         camera_pos = nusc.get('calibrated_sensor', camera_rec['calibrated_sensor_token'])['translation']
         radar_pos = nusc.get('calibrated_sensor', radar_rec['calibrated_sensor_token'])['translation']
         camera_to_radar_pos = np.array(camera_pos) - np.array(radar_pos)
-        _, boxes, camera_intrinsic = nusc.get_sample_data(camera_rec['token'], box_vis_level=BoxVisibility.ANY)
+        _, boxes, camera_intrinsic = nusc.get_sample_data(camera_rec['token'], box_vis_level=box_visibility)
 
         bboxes = []
         for box in boxes:
@@ -331,7 +333,7 @@ if __name__ == "__main__":
 
     annotations = get_annotation_bbox(nusc, sample_tokens)
     radar_points, radar_meta_data = get_radar_points(nusc, sample_tokens)
-    radar_in_image = radar_point_to_image(nusc, sample_tokens, radar_points)
+    radar_in_image = adar_point_to_image(nusc, sample_tokens, radar_points)
     rcs_colors = get_rcs_color(sample_tokens, radar_meta_data);
     annotations = check_radar_in_2dbbox(sample_tokens, annotations, radar_in_image)
     
@@ -353,12 +355,29 @@ if __name__ == "__main__":
         plt.clf()
         plt.xlabel("y [m]")
         plt.ylabel("x(forward) [m]")
-        
+        vert_lim = 160
+        horiz_lim = 80
+        near_max_angle = 60
+        middle_max_angle = 45
+        long_max_angle = 9
+        plt.xlim([-horiz_lim, horiz_lim])
+        plt.ylim([0, vert_lim])
+        plt.xticks(range(-horiz_lim, horiz_lim+1, 10))
+        plt.yticks(range(0, vert_lim+1, 10))
+        plt.grid(which = "major", axis ="x", color = "black", alpha = 0.6, linewidth = 1 )
+        plt.grid(which = "major", axis ="y", color = "black", alpha = 0.6, linewidth = 1 )
+        plt.grid(which = "minor", axis ="x", color = "black", alpha = 0.6, linewidth = 1 )
+        plt.grid(which = "minor", axis ="y", color = "black", alpha = 0.6, linewidth = 1 )
+        long_range_fov = pat.Wedge(center = (0, 0), r = 250, theta1 = 90 - long_max_angle, theta2 = 90 + long_max_angle, color = "red", alpha = 0.2)
+        middle_range_fov = pat.Wedge(center = (0, 0), r = 100, theta1 = 90 - middle_max_angle, theta2 = 90 + middle_max_angle, color = "green", alpha = 0.2)
+        short_range_fov = pat.Wedge(center = (0, 0), r = 20, theta1 = 90 - near_max_angle, theta2 = 90 + near_max_angle, color = "blue", alpha = 0.2)
+        ax = plt.axes()
+        ax.add_patch(long_range_fov)
+        ax.add_patch(middle_range_fov)
+        ax.add_patch(short_range_fov)
         plt.scatter(-radar_point[1,:], radar_point[0,:], c = "black", s = scatter_size)
 
         vx_vy_comp = radar_meta_data[token_index][5:7,:]*4
-        #vx_vy_comp = vx_vy_comp/(np.linalg.norm(vx_vy_comp, axis=0)+1e-5)*5
-        #plt.plot([-radar_point[1,:], -radar_point[1,:]-vx_vy_comp[1,:]], [radar_point[0,:], radar_point[0,:]+vx_vy_comp[0,:]], 'k-', color="r", linewidth = 0.5)
         selected_point_ids = []
         for data in annotations[token_index]["annotations"]:
             if not (data["label"] in class_to_color):
