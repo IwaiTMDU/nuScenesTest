@@ -333,7 +333,7 @@ if __name__ == "__main__":
 
     annotations = get_annotation_bbox(nusc, sample_tokens)
     radar_points, radar_meta_data = get_radar_points(nusc, sample_tokens)
-    radar_in_image = adar_point_to_image(nusc, sample_tokens, radar_points)
+    radar_in_image = radar_point_to_image(nusc, sample_tokens, radar_points)
     rcs_colors = get_rcs_color(sample_tokens, radar_meta_data);
     annotations = check_radar_in_2dbbox(sample_tokens, annotations, radar_in_image)
     
