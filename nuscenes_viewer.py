@@ -15,7 +15,7 @@ from pyquaternion import Quaternion
 import copy
 from nuscenes.utils.geometry_utils import BoxVisibility
 
-
+version = "v1.0-mini"
 dataroot = "v1.0-mini"
 box_visibility = BoxVisibility.ANY
 '''
@@ -233,6 +233,7 @@ def radar_point_to_image(nusc, tokens, radar_points):
         camera_rec = nusc.get('sample_data', sample['data']["CAM_FRONT"])
         radar_rec = nusc.get('sample_data', sample['data']["RADAR_FRONT"])
         pc = PointCloud(copy.deepcopy(radar_points[token_index]))
+        print(pc.points[2,:])
 
         # Points live in the point sensor frame. So they need to be transformed via global to the image plane.
         # First step: transform the point-cloud to the ego vehicle frame for the timestamp of the sweep.
@@ -295,7 +296,7 @@ def check_radar_in_2dbbox(tokens, annotations, radar_in_image):
 
 
 if __name__ == "__main__":
-    nusc = NuScenes(version = "v1.0-mini", dataroot = dataroot, verbose=False)
+    nusc = NuScenes(version = version, dataroot = dataroot, verbose=False)
     scene_num = len(nusc.scene)
     sample_tokens = {}
     prog = 0
@@ -309,6 +310,8 @@ if __name__ == "__main__":
     distance_phd0 = []
     error_of_1file = []
     best_files = []
+    token_scene = []
+    scene_videos = {}
 
     # Assign color
     class_to_color['bg'] = np.zeros(3)
@@ -326,6 +329,7 @@ if __name__ == "__main__":
 
         for _ in range(nbr_samples):
             sample_tokens[prog] = curr_sample['token']
+            token_scene.append(nusc.scene[scene_index]["name"])
             if curr_sample['next']:
                 next_token = curr_sample['next']
                 curr_sample = nusc.get('sample', next_token)
@@ -348,15 +352,19 @@ if __name__ == "__main__":
         legends.append(mpatches.Patch(color=np.concatenate([color, [1]]), label=label))
 
     out_vid_shape = (1440, 405)
-    out_vid = cv2.VideoWriter("result.mp4", cv2.VideoWriter_fourcc(*'mp4v'), 2, out_vid_shape)
+    out_vid = cv2.VideoWriter("result.mp4", cv2.VideoWriter_fourcc(*'mp4v'), 0.5, out_vid_shape)
+    for scene_index in range(scene_num):
+        scene_name = nusc.scene[scene_index]["name"]
+        scene_videos[scene_name] = cv2.VideoWriter("{}.mp4".format(scene_name), cv2.VideoWriter_fourcc(*'mp4v'), 2, out_vid_shape)
+
     for token_index in tqdm(range(len(sample_tokens))):
         radar_point = radar_points[token_index]
 
         plt.clf()
         plt.xlabel("y [m]")
         plt.ylabel("x(forward) [m]")
-        vert_lim = 160
-        horiz_lim = 80
+        vert_lim = 120
+        horiz_lim = 30
         near_max_angle = 60
         middle_max_angle = 45
         long_max_angle = 9
@@ -423,9 +431,14 @@ if __name__ == "__main__":
         cv2.imwrite(os.path.join(save_dir, str(token_index).zfill(4)+".jpg"), out_img)
         
         out_img = cv2.resize(out_img, out_vid_shape)
+        scene_videos[token_scene[token_index]].write(out_img)
         out_vid.write(out_img)
 
+    for scene_index in range(scene_num):
+        scene_name = nusc.scene[scene_index]["name"]
+        scene_videos[scene_name].release()
     out_vid.release()
+    
     print("MAE: {}, std: {}".format(np.mean(distance_errors), np.std(distance_errors)))
 
     dis_label = sorted(zip(error_of_1file, best_files))
