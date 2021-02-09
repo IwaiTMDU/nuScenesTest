@@ -233,7 +233,6 @@ def radar_point_to_image(nusc, tokens, radar_points):
         camera_rec = nusc.get('sample_data', sample['data']["CAM_FRONT"])
         radar_rec = nusc.get('sample_data', sample['data']["RADAR_FRONT"])
         pc = PointCloud(copy.deepcopy(radar_points[token_index]))
-        print(pc.points[2,:])
 
         # Points live in the point sensor frame. So they need to be transformed via global to the image plane.
         # First step: transform the point-cloud to the ego vehicle frame for the timestamp of the sweep.
@@ -295,6 +294,75 @@ def check_radar_in_2dbbox(tokens, annotations, radar_in_image):
     return annotations
 
 
+def get_class_priority(label):
+    '''
+    classes
+        'vehicle.bicycle',
+        'vehicle.bus.bendy',
+        'vehicle.bus.rigid',
+        'vehicle.car',
+        'vehicle.construction',
+        'vehicle.emergency.ambulance',
+        'vehicle.emergency.police',
+        'vehicle.motorcycle',
+        'vehicle.trailer',
+        'vehicle.truck'
+    '''
+
+    if 'bicycle' in label:
+        return 2
+    elif 'car' in label:
+        return 1
+    else:
+        return 0
+
+
+def compare_bbox_area(bbox1, bbox2):
+    area1 = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
+    area2 = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
+
+    return 0 if area1 > area2 else 1
+
+
+def check_radar_in_2dbbox2(tokens, annotations, radar_in_image):
+
+    img_idx = -1
+
+    for token_index in tqdm(range(len(tokens))):
+        token_annotations = annotations[token_index]["annotations"]
+        for ann_index in range(len(token_annotations)):
+            token_annotations[ann_index]["radar_indexes"] = []
+
+        for point_index in range(radar_in_image[token_index].shape[1]):
+            point = radar_in_image[token_index][:,point_index]
+            u, v = int(point[0]), int(point[1])
+            
+            bbox_candidate = [] # pointがbbox内にあるbbox
+            for ann_index, annotation in enumerate(token_annotations):
+                box = annotation["box"]
+                if((box[0] <= u <= box[2]) and (box[1] <= v <= box[3])): # bbox内にあるとき
+                    bbox_candidate.append(ann_index) # annotationのデータを一旦入れておく
+            if len(bbox_candidate) == 1:
+                # bboxが一つならそれをpoint_indexに追加 
+                token_annotations[bbox_candidate[0]]["radar_indexes"].append(point_index)
+            
+            elif len(bbox_candidate) > 1:
+                high_prio_index = bbox_candidate[0]
+                for bbox_cand in bbox_candidate[1:]:
+                    high_prio_ann = token_annotations[high_prio_index]
+                    cand_ann = token_annotations[bbox_cand]
+                    if get_class_priority(high_prio_ann["label"]) == get_class_priority(cand_ann["label"]):# 同じ優先度
+                        if compare_bbox_area(high_prio_ann["box"], cand_ann["box"]) != 0:
+                            high_prio_index = bbox_cand
+                        
+                    elif get_class_priority(high_prio_ann["label"]) < get_class_priority(cand_ann["label"]):# 自転車 < 車 < トラック
+                        high_prio_index = bbox_cand
+
+                token_annotations[high_prio_index]["radar_indexes"].append(point_index)
+            
+    return annotations
+
+
 if __name__ == "__main__":
     nusc = NuScenes(version = version, dataroot = dataroot, verbose=False)
     scene_num = len(nusc.scene)
@@ -339,7 +407,7 @@ if __name__ == "__main__":
     radar_points, radar_meta_data = get_radar_points(nusc, sample_tokens)
     radar_in_image = radar_point_to_image(nusc, sample_tokens, radar_points)
     rcs_colors = get_rcs_color(sample_tokens, radar_meta_data);
-    annotations = check_radar_in_2dbbox(sample_tokens, annotations, radar_in_image)
+    annotations = check_radar_in_2dbbox2(sample_tokens, annotations, radar_in_image)
     
     out_imgs = []
 
@@ -397,7 +465,7 @@ if __name__ == "__main__":
             for i_corner in range(4):
                 plt.plot([-corner[1][i_corner], -corner[1][(i_corner+1)%4]], [corner[0][i_corner], corner[0][(i_corner+1)%4]], 'k-', c = np.concatenate([color, [1]]), linewidth = 0.7)  
             if len(radar_indexes) > 0:
-                np_points = np.array(radar_point[:,radar_indexes])
+                np_points = np.array(radar_point[:2,radar_indexes])
                 dists = np.linalg.norm(np_points, axis=0)
                 if True:
                     dist = dists.min()
