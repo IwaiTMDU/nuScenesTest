@@ -63,7 +63,7 @@ class_names = [
 
 class_to_color = {}
 
-def put_bbox_into_image(annotation, radar_in_image = None, selected_point_ids = None, rcs_colors = None):
+def put_bbox_into_image(annotation, radar_in_image = None, selected_point_ids = None, rcs_colors = None, radar_points_distance = None):
     font                   = cv2.FONT_HERSHEY_SIMPLEX
     fontScale              = 1.0
 
@@ -74,31 +74,50 @@ def put_bbox_into_image(annotation, radar_in_image = None, selected_point_ids = 
             continue
         (x1, y1, x2, y2) = data["box"].astype(np.int32)
         color =class_to_color[data["label"]] * 255
-        cv2.rectangle(image,(x1, y1), (x2, y2), color,2)
         put_class_label = data["label"].split('.')[-1]
         text = put_class_label
         if data["distance"] is not None:
             text += "[{}m]".format(round(data["distance"], 1))
+        else: # bbox has no radar points
+            no_point_color = (0, 0, 0)
+            cv2.rectangle(image,(x1, y1), (x2, y2), no_point_color, 12)
         (retval,baseLine) = cv2.getTextSize(text, font, fontScale,1)
         textOrg = int(x1), int(y1)
 
-        cv2.rectangle(image, (textOrg[0] - 1,textOrg[1]+baseLine - 1), (textOrg[0]+retval[0] + 1, textOrg[1]-retval[1] - 1), color, -1)
-        cv2.putText(image, text, textOrg, cv2.FONT_HERSHEY_SIMPLEX, fontScale, (1,1,1), 1)
+        cv2.rectangle(image,(x1, y1), (x2, y2), color,2) # bbox
+        cv2.rectangle(image, (textOrg[0] - 1,textOrg[1]+baseLine - 1), (textOrg[0]+retval[0] + 1, textOrg[1]-retval[1] - 1), color, -1) # text box
+        cv2.putText(image, text, textOrg, cv2.FONT_HERSHEY_SIMPLEX, fontScale, (1,1,1), 1) # text
         
+    image_rcs = image.copy()
+    image_range = image.copy()
+    max_distance = 100
+    radar_points_distance = np.clip(radar_points_distance, 0, max_distance)
+
     if (radar_in_image is not None) and (rcs_colors is not None):
         for point_index in range(radar_in_image.shape[1]):
             point = radar_in_image[:,point_index]
             u, v = int(point[0]), int(point[1])
             point_color = rcs_colors[token_index][point_index]
             point_color = (int(point_color[0]), int(point_color[1]), int(point_color[2]))
+            range_hue = 120*(radar_points_distance[point_index]/max_distance)
+            range_hsv = 255*np.ones(3).astype(np.uint8)
+            range_hsv[0] = range_hue
+            range_bgr = cv2.cvtColor(np.array([[range_hsv]], dtype=np.uint8), cv2.COLOR_HSV2BGR).reshape(3)
+
             if ((0 <= u <= image.shape[1]) and (0 <= v <= image.shape[0])): # point is in the image
                 if point_index in selected_point_ids:
-                    cv2.circle(image, (u, v), 12, color = point_color, thickness = -1, lineType = cv2.LINE_8)    
-                    cv2.circle(image, (u, v), 6, color = [0, 0, 0, 0], thickness = -1, lineType = cv2.LINE_8)
-                else:
-                    cv2.circle(image, (u, v), 6, color = point_color, thickness = -1, lineType = cv2.LINE_8)
+                    cv2.circle(image_rcs, (u, v), 12, color = point_color, thickness = -1, lineType = cv2.LINE_8)    
+                    cv2.circle(image_rcs, (u, v), 6, color = [0, 0, 0, 0], thickness = -1, lineType = cv2.LINE_8)
 
-    return image
+                    cv2.circle(image_range, (u, v), 12, color = (int(range_bgr[0]), int(range_bgr[1]), int(range_bgr[2])), thickness = -1, lineType = cv2.LINE_8)    
+                    cv2.circle(image_range, (u, v), 6, color = [0, 0, 0, 0], thickness = -1, lineType = cv2.LINE_8)
+                else:
+                    cv2.circle(image_rcs, (u, v), 6, color = point_color, thickness = -1, lineType = cv2.LINE_8)
+                    cv2.circle(image_range, (u, v), 6, color = (int(range_bgr[0]), int(range_bgr[1]), int(range_bgr[2])), thickness = -1, lineType = cv2.LINE_8)
+    
+    output_image = cv2.vconcat([image_rcs, image_range])
+
+    return output_image
 
 def get_annotation_bbox(nusc, tokens):
     annotations = []
@@ -265,14 +284,15 @@ def radar_point_to_image(nusc, tokens, radar_points):
 def get_rcs_color(tokens, radar_meta_data):
     colors = []
     for token_index in tqdm(range(len(tokens))):
-        rcs_positive = np.power(10, radar_meta_data[token_index][2,:]/20.0)
-        max_rcs = np.max(rcs_positive)
-
-        rcs_hue = 120*(max_rcs - rcs_positive).astype(np.uint8)
+        #rcs_positive = np.power(10, radar_meta_data[token_index][2,:]/20.0)
+        #max_rcs = np.max(rcs_positive)
+        max_rcs = np.max(radar_meta_data[token_index][2,:])
+        min_rcs = np.min(radar_meta_data[token_index][2,:])
+        rcs_hue = (120*((radar_meta_data[token_index][2,:] - min_rcs)/(max_rcs - min_rcs))).astype(np.uint8)
         rcs_hsv = 255*np.ones((rcs_hue.shape[0], 3)).astype(np.uint8)
         rcs_hsv[:,0] = rcs_hue
         
-        rcs_colors = np.array([cv2.cvtColor(np.array([[rcs_hsv[point_idx]]], dtype=np.uint8), cv2.COLOR_HSV2BGR) for point_idx in range(rcs_hsv.shape[0])])
+        rcs_colors = np.array([cv2.cvtColor(np.array([[rcs_hsv[point_idx]]], dtype=np.uint8), cv2.COLOR_HSV2RGB) for point_idx in range(rcs_hsv.shape[0])])
         rcs_colors = np.reshape(rcs_colors, (rcs_colors.shape[0],3))
         #rcs_colors = np.concatenate([rcs_colors, 255*np.ones((rcs_colors.shape[0],1))], 1)
         colors.append(rcs_colors)
@@ -325,9 +345,6 @@ def compare_bbox_area(bbox1, bbox2):
 
 
 def check_radar_in_2dbbox2(tokens, annotations, radar_in_image):
-
-    img_idx = -1
-
     for token_index in tqdm(range(len(tokens))):
         token_annotations = annotations[token_index]["annotations"]
         for ann_index in range(len(token_annotations)):
@@ -355,7 +372,7 @@ def check_radar_in_2dbbox2(tokens, annotations, radar_in_image):
                         if compare_bbox_area(high_prio_ann["box"], cand_ann["box"]) != 0:
                             high_prio_index = bbox_cand
                         
-                    elif get_class_priority(high_prio_ann["label"]) < get_class_priority(cand_ann["label"]):# 自転車 < 車 < トラック
+                    elif get_class_priority(high_prio_ann["label"]) > get_class_priority(cand_ann["label"]):# 自転車 < 車 < トラック
                         high_prio_index = bbox_cand
 
                 token_annotations[high_prio_index]["radar_indexes"].append(point_index)
@@ -385,7 +402,7 @@ if __name__ == "__main__":
     class_to_color['bg'] = np.zeros(3)
     for class_id, class_name in enumerate(class_names):
         class_color_hsv = 255*np.ones(3).astype(np.uint8)
-        class_color_hsv[0] = np.uint8(float(class_id) / len(class_names) * 120)
+        class_color_hsv[0] = np.uint8((float(class_id) / len(class_names))**2 * 120)
         class_to_color[class_name] = cv2.cvtColor(np.array([[class_color_hsv]], dtype=np.uint8), cv2.COLOR_HSV2BGR)/255.0
         class_to_color[class_name] = class_to_color[class_name].reshape(3)
     
@@ -407,7 +424,7 @@ if __name__ == "__main__":
     radar_points, radar_meta_data = get_radar_points(nusc, sample_tokens)
     radar_in_image = radar_point_to_image(nusc, sample_tokens, radar_points)
     rcs_colors = get_rcs_color(sample_tokens, radar_meta_data);
-    annotations = check_radar_in_2dbbox2(sample_tokens, annotations, radar_in_image)
+    annotations = check_radar_in_2dbbox(sample_tokens, annotations, radar_in_image)
     
     out_imgs = []
 
@@ -419,7 +436,7 @@ if __name__ == "__main__":
         color = class_to_color[label]
         legends.append(mpatches.Patch(color=np.concatenate([color, [1]]), label=label))
 
-    out_vid_shape = (1440, 405)
+    out_vid_shape = (1440, 810)
     out_vid = cv2.VideoWriter("result.mp4", cv2.VideoWriter_fourcc(*'mp4v'), 0.5, out_vid_shape)
     for scene_index in range(scene_num):
         scene_name = nusc.scene[scene_index]["name"]
@@ -431,7 +448,7 @@ if __name__ == "__main__":
         plt.clf()
         plt.xlabel("y [m]")
         plt.ylabel("x(forward) [m]")
-        vert_lim = 120
+        vert_lim = 100
         horiz_lim = 30
         near_max_angle = 60
         middle_max_angle = 45
@@ -444,17 +461,19 @@ if __name__ == "__main__":
         plt.grid(which = "major", axis ="y", color = "black", alpha = 0.6, linewidth = 1 )
         plt.grid(which = "minor", axis ="x", color = "black", alpha = 0.6, linewidth = 1 )
         plt.grid(which = "minor", axis ="y", color = "black", alpha = 0.6, linewidth = 1 )
-        long_range_fov = pat.Wedge(center = (0, 0), r = 250, theta1 = 90 - long_max_angle, theta2 = 90 + long_max_angle, color = "red", alpha = 0.2)
-        middle_range_fov = pat.Wedge(center = (0, 0), r = 100, theta1 = 90 - middle_max_angle, theta2 = 90 + middle_max_angle, color = "green", alpha = 0.2)
-        short_range_fov = pat.Wedge(center = (0, 0), r = 20, theta1 = 90 - near_max_angle, theta2 = 90 + near_max_angle, color = "blue", alpha = 0.2)
+        long_range_fov = pat.Wedge(center = (0, 0), r = 250, theta1 = 90 - long_max_angle, theta2 = 90 + long_max_angle, color = "red", alpha = 0.08)
+        middle_range_fov = pat.Wedge(center = (0, 0), r = 100, theta1 = 90 - middle_max_angle, theta2 = 90 + middle_max_angle, color = "green", alpha = 0.08)
+        short_range_fov = pat.Wedge(center = (0, 0), r = 20, theta1 = 90 - near_max_angle, theta2 = 90 + near_max_angle, color = "blue", alpha = 0.08)
         ax = plt.axes()
         ax.add_patch(long_range_fov)
         ax.add_patch(middle_range_fov)
         ax.add_patch(short_range_fov)
-        plt.scatter(-radar_point[1,:], radar_point[0,:], c = "black", s = scatter_size)
+        # plt.scatter(-radar_point[1,:], radar_point[0,:], c = "black", s = scatter_size)
+        plt.scatter(-radar_point[1,:], radar_point[0,:], c = np.concatenate([np.array(rcs_colors[token_index])/255.0, np.ones((rcs_colors[token_index].shape[0], 1))], axis=1), s = scatter_size)
 
         vx_vy_comp = radar_meta_data[token_index][5:7,:]*4
         selected_point_ids = []
+        point_dists = np.linalg.norm(radar_point[:2, :], axis=0)
         for data in annotations[token_index]["annotations"]:
             if not (data["label"] in class_to_color):
                 continue
@@ -466,7 +485,7 @@ if __name__ == "__main__":
                 plt.plot([-corner[1][i_corner], -corner[1][(i_corner+1)%4]], [corner[0][i_corner], corner[0][(i_corner+1)%4]], 'k-', c = np.concatenate([color, [1]]), linewidth = 0.7)  
             if len(radar_indexes) > 0:
                 np_points = np.array(radar_point[:2,radar_indexes])
-                dists = np.linalg.norm(np_points, axis=0)
+                dists = point_dists[radar_indexes]
                 if True:
                     dist = dists.min()
                 else:
@@ -483,8 +502,9 @@ if __name__ == "__main__":
                 distance_files.append(token_index)
                 distance_dist.append(dist)
                 distance_phd0.append(radar_meta_data[token_index][12][radar_indexes])
-                plt.plot([-gt_center[1], -selected_point[1]], [gt_center[0], selected_point[0]],'k-', c = np.concatenate([color, [1]]), linewidth = 1.5)
-                plt.scatter(-radar_point[1,radar_indexes], radar_point[0,radar_indexes], c = [color], s = scatter_size)
+                plt.plot([-gt_center[1], -selected_point[1]], [gt_center[0], selected_point[0]],'k-', c = [0, 0, 0.4, 1], linewidth = 1.5)
+                
+                #plt.scatter(-radar_point[1,radar_indexes], radar_point[0,radar_indexes], c = [color], s = scatter_size) # class color
         error_of_1file.append(np.mean(distance_errors))
         best_files.append(token_index)
         bev_im_buf = io.BytesIO()
@@ -492,7 +512,7 @@ if __name__ == "__main__":
         plt.savefig(bev_im_buf, format='jpg', bbox_inches='tight')
         bev_im = cv2.imdecode(np.frombuffer(bev_im_buf.getvalue(), dtype=np.uint8), 1)
 
-        cam_img = put_bbox_into_image(annotations[token_index], radar_in_image=radar_in_image[token_index], selected_point_ids=selected_point_ids, rcs_colors = rcs_colors)
+        cam_img = put_bbox_into_image(annotations[token_index], radar_in_image=radar_in_image[token_index], selected_point_ids=selected_point_ids, rcs_colors = rcs_colors, radar_points_distance = point_dists)
         asp = cam_img.shape[0]/bev_im.shape[0]
         bev_im = cv2.resize(bev_im, dsize=(round(asp*bev_im.shape[1]), cam_img.shape[0]))
         out_img = cv2.hconcat([cam_img, bev_im])
