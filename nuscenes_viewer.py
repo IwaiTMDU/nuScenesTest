@@ -14,6 +14,9 @@ from PIL import Image
 from pyquaternion import Quaternion
 import copy
 from nuscenes.utils.geometry_utils import BoxVisibility
+import time
+from camera_radar_fusion import radar_fusion_min_distance, radar_fusion_cluster
+
 
 version = "v1.0-mini"
 dataroot = "v1.0-mini"
@@ -133,13 +136,14 @@ def get_annotation_bbox(nusc, tokens):
 
         bboxes = []
         for box in boxes:
-            corners = box.bottom_corners()
-            corners = corners[[2,0,1], :]
-            corners[1,:] = -corners[1,:]
-            bev_corners = corners + np.expand_dims(camera_to_radar_pos, axis=1)
-            camera_bbox = box.box2d(camera_intrinsic)
-            
-            bboxes.append({"label":box.name, "box":camera_bbox, "bev_box":bev_corners})
+            if box.name in class_names:
+                corners = box.bottom_corners()
+                corners = corners[[2,0,1], :]
+                corners[1,:] = -corners[1,:]
+                bev_corners = corners + np.expand_dims(camera_to_radar_pos, axis=1)
+                camera_bbox = box.box2d(camera_intrinsic)
+                
+                bboxes.append({"label":box.name, "box":camera_bbox, "bev_box":bev_corners})
         annotations.append({"image_file":os.path.join(dataroot,camera_rec["filename"]), "annotations":bboxes})
 
     return annotations
@@ -387,14 +391,6 @@ if __name__ == "__main__":
     prog = 0
     save_dir = "result"
     os.makedirs(save_dir, exist_ok=True)
-    distance_errors = []
-    distance_labels = []
-    distance_centers = []
-    distance_files = []
-    distance_dist=[]
-    distance_phd0 = []
-    error_of_1file = []
-    best_files = []
     token_scene = []
     scene_videos = {}
 
@@ -425,19 +421,13 @@ if __name__ == "__main__":
     radar_in_image = radar_point_to_image(nusc, sample_tokens, radar_points)
     rcs_colors = get_rcs_color(sample_tokens, radar_meta_data);
     annotations = check_radar_in_2dbbox(sample_tokens, annotations, radar_in_image)
-    
-    out_imgs = []
 
-    # BEV
-    plt.figure(1)
+    plt.figure(1) # BEV
     scatter_size = 10
-    legends = []
-    for label in class_to_color.keys():
-        color = class_to_color[label]
-        legends.append(mpatches.Patch(color=np.concatenate([color, [1]]), label=label))
 
     out_vid_shape = (1440, 810)
     out_vid = cv2.VideoWriter("result.mp4", cv2.VideoWriter_fourcc(*'mp4v'), 0.5, out_vid_shape)
+    time_calc_distance = []
     for scene_index in range(scene_num):
         scene_name = nusc.scene[scene_index]["name"]
         scene_videos[scene_name] = cv2.VideoWriter("{}.mp4".format(scene_name), cv2.VideoWriter_fourcc(*'mp4v'), 2, out_vid_shape)
@@ -468,47 +458,37 @@ if __name__ == "__main__":
         ax.add_patch(long_range_fov)
         ax.add_patch(middle_range_fov)
         ax.add_patch(short_range_fov)
-        # plt.scatter(-radar_point[1,:], radar_point[0,:], c = "black", s = scatter_size)
+        
         plt.scatter(-radar_point[1,:], radar_point[0,:], c = np.concatenate([np.array(rcs_colors[token_index])/255.0, np.ones((rcs_colors[token_index].shape[0], 1))], axis=1), s = scatter_size)
 
-        vx_vy_comp = radar_meta_data[token_index][5:7,:]*4
-        selected_point_ids = []
-        point_dists = np.linalg.norm(radar_point[:2, :], axis=0)
-        for data in annotations[token_index]["annotations"]:
+        # fusion
+        start_time = time.time()
+        selected_point_ids, selected_points, distances = radar_fusion_cluster(annotations[token_index]["annotations"], radar_point = radar_point)
+        #selected_point_ids, selected_points, distances = radar_fusion_min_distance(annotations[token_index]["annotations"], radar_point = radar_point)
+        time_calc_distance.append(time.time() - start_time)
+
+        point_dists = np.linalg.norm(radar_point[:2, :], ord = 2, axis=0)
+
+        for idx, data in enumerate(annotations[token_index]["annotations"]):
+            # plot
             if not (data["label"] in class_to_color):
                 continue
             color = class_to_color[data["label"]][::-1]
-            radar_indexes = data["radar_indexes"]
+            gt_center = data["bev_box"].mean(axis=1)
+            selected_point = selected_points[idx]
+            data["distance"] = distances[idx]
             corner = data["bev_box"]
-            data["distance"] = None
-            for i_corner in range(4):
-                plt.plot([-corner[1][i_corner], -corner[1][(i_corner+1)%4]], [corner[0][i_corner], corner[0][(i_corner+1)%4]], 'k-', c = np.concatenate([color, [1]]), linewidth = 0.7)  
-            if len(radar_indexes) > 0:
-                np_points = np.array(radar_point[:2,radar_indexes])
-                dists = point_dists[radar_indexes]
-                if True:
-                    dist = dists.min()
-                else:
-                    dist = dists.mean()
-                data["distance"] = dist
-                selected_point_id = dists.argmin()
-                selected_point = np_points[:,selected_point_id]
-                selected_point_ids.append(radar_indexes[selected_point_id])
-                gt_center = data["bev_box"].mean(axis=1)
-                gt_dist = np.linalg.norm(gt_center)
-                distance_errors.append(np.abs(gt_dist - dist))
-                distance_labels.append(data["label"])
-                distance_centers.append(gt_center)
-                distance_files.append(token_index)
-                distance_dist.append(dist)
-                distance_phd0.append(radar_meta_data[token_index][12][radar_indexes])
+
+            for i_corner in range(4): # plot bev bbox
+                if data["distance"] is None: # not fused
+                    plt.plot([-corner[1][i_corner], -corner[1][(i_corner+1)%4]], [corner[0][i_corner], corner[0][(i_corner+1)%4]], 'k-', c = (0, 0, 0), linewidth = 5)
+                plt.plot([-corner[1][i_corner], -corner[1][(i_corner+1)%4]], [corner[0][i_corner], corner[0][(i_corner+1)%4]], 'k-', c = np.concatenate([color, [1]]), linewidth = 0.7)
+
+            if selected_point is not None:
+                # plot radar point to bbox center
                 plt.plot([-gt_center[1], -selected_point[1]], [gt_center[0], selected_point[0]],'k-', c = [0, 0, 0.4, 1], linewidth = 1.5)
-                
-                #plt.scatter(-radar_point[1,radar_indexes], radar_point[0,radar_indexes], c = [color], s = scatter_size) # class color
-        error_of_1file.append(np.mean(distance_errors))
-        best_files.append(token_index)
+
         bev_im_buf = io.BytesIO()
-        #plt.legend(handles=legends, bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0, fontsize=18)
         plt.savefig(bev_im_buf, format='jpg', bbox_inches='tight')
         bev_im = cv2.imdecode(np.frombuffer(bev_im_buf.getvalue(), dtype=np.uint8), 1)
 
@@ -522,22 +502,9 @@ if __name__ == "__main__":
         scene_videos[token_scene[token_index]].write(out_img)
         out_vid.write(out_img)
 
+    print("Time calc distance : {}, max : {}, min : {}".format(np.mean(time_calc_distance), np.max(time_calc_distance), np.min(time_calc_distance)))
+
     for scene_index in range(scene_num):
         scene_name = nusc.scene[scene_index]["name"]
         scene_videos[scene_name].release()
     out_vid.release()
-    
-    print("MAE: {}, std: {}".format(np.mean(distance_errors), np.std(distance_errors)))
-
-    dis_label = sorted(zip(error_of_1file, best_files))
-    topk = 20
-    best, files = zip(*dis_label)
-    print("Best dist {}".format(best[:topk]))
-    print("Best file {}".format(files[:topk]))
-
-    dis_label = sorted(zip(distance_errors, distance_labels, distance_files, distance_centers, distance_dist, distance_phd0))
-    worst, labels, files, centers, dists, phd0s = zip(*dis_label)
-    topk = 10
-    print("Worst error {}".format(worst[::-1][:topk]))
-    print("Worst file {}".format(files[::-1][:topk]))
-    print("Worst center {}".format(centers[::-1][:topk]))
