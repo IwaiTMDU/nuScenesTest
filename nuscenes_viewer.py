@@ -15,7 +15,7 @@ from pyquaternion import Quaternion
 import copy
 from nuscenes.utils.geometry_utils import BoxVisibility
 import time
-from camera_radar_fusion import radar_fusion_min_distance, radar_fusion_cluster
+from camera_radar_fusion import radar_fusion_min_distance, radar_fusion_cluster, radar_fusion_camera_to_bev, fusion_bevxyz_and_radar_min
 
 
 version = "v1.0-mini"
@@ -51,18 +51,25 @@ class_names = [
 '''
 
 class_names = [
-    'bg' ,
     'vehicle.bicycle',
     'vehicle.bus.bendy',
     'vehicle.bus.rigid',
     'vehicle.car',
     'vehicle.construction',
-    'vehicle.emergency.ambulance',
-    'vehicle.emergency.police',
     'vehicle.motorcycle',
     'vehicle.trailer',
     'vehicle.truck'
 ]
+
+object_heights = {
+    'vehicle.bicycle':1.279, 
+    'vehicle.bus.bendy':3.625, 
+    'vehicle.bus.rigid':4.016, 
+    'vehicle.car':1.8034, 
+    'vehicle.construction':2.355, 
+    'vehicle.motorcycle':1.460, 
+    'vehicle.trailer':3.410, 
+    'vehicle.truck':2.791}
 
 class_to_color = {}
 
@@ -124,6 +131,7 @@ def put_bbox_into_image(annotation, radar_in_image = None, selected_point_ids = 
 
 def get_annotation_bbox(nusc, tokens):
     annotations = []
+    heights = {}
     for token_index in tqdm(range(len(tokens))):
         token = tokens[token_index]
         sample = nusc.get('sample', token)
@@ -138,15 +146,31 @@ def get_annotation_bbox(nusc, tokens):
         for box in boxes:
             if box.name in class_names:
                 corners = box.bottom_corners()
+                top_corners = box.corners()[:,[1, 0, 4, 5]]
                 corners = corners[[2,0,1], :]
                 corners[1,:] = -corners[1,:]
+
+                top_corners = top_corners[[2,0,1], :]
+                top_corners[1,:] = -top_corners[1,:]
+                
                 bev_corners = corners + np.expand_dims(camera_to_radar_pos, axis=1)
+                height = (corners - top_corners).mean(axis=0)[2] + camera_to_radar_pos[2]
+
+                if not (box.name in heights.keys()):
+                    heights[box.name] = [height]
+                else:
+                    heights[box.name].append(height)
+
                 camera_bbox = box.box2d(camera_intrinsic)
                 
                 bboxes.append({"label":box.name, "box":camera_bbox, "bev_box":bev_corners})
         annotations.append({"image_file":os.path.join(dataroot,camera_rec["filename"]), "annotations":bboxes})
-
-    return annotations
+    for key in heights.keys():
+        heights[key] = np.mean(heights[key]) + np.std(heights[key])
+        #heights[key] = np.mean(heights[key])
+        #heights[key] = np.max(heights[key])
+        #heights[key] = np.min(heights[key])
+    return annotations, heights
 
 
 def get_radar_points(nusc, tokens):
@@ -393,6 +417,11 @@ if __name__ == "__main__":
     os.makedirs(save_dir, exist_ok=True)
     token_scene = []
     scene_videos = {}
+    distance_errors = {}
+    gt_error_data = {}
+    for class_name in class_names:
+        distance_errors[class_name] = []
+        gt_error_data[class_name] = []
 
     # Assign color
     class_to_color['bg'] = np.zeros(3)
@@ -416,7 +445,7 @@ if __name__ == "__main__":
                 curr_sample = nusc.get('sample', next_token)
             prog += 1
 
-    annotations = get_annotation_bbox(nusc, sample_tokens)
+    annotations, _ = get_annotation_bbox(nusc, sample_tokens)
     radar_points, radar_meta_data = get_radar_points(nusc, sample_tokens)
     radar_in_image = radar_point_to_image(nusc, sample_tokens, radar_points)
     rcs_colors = get_rcs_color(sample_tokens, radar_meta_data);
@@ -463,8 +492,10 @@ if __name__ == "__main__":
 
         # fusion
         start_time = time.time()
-        selected_point_ids, selected_points, distances = radar_fusion_cluster(annotations[token_index]["annotations"], radar_point = radar_point)
+        #selected_point_ids, selected_points, distances = radar_fusion_cluster(annotations[token_index]["annotations"], radar_point = radar_point)
         #selected_point_ids, selected_points, distances = radar_fusion_min_distance(annotations[token_index]["annotations"], radar_point = radar_point)
+        selected_point_ids, selected_points, distances = radar_fusion_camera_to_bev(annotations[token_index]["annotations"], radar_point = radar_point, nusc = nusc, token = sample_tokens[token_index], heights = object_heights)
+        #selected_point_ids, selected_points, distances = fusion_bevxyz_and_radar_min(annotations[token_index]["annotations"], radar_point = radar_point, nusc = nusc, token = sample_tokens[token_index])
         time_calc_distance.append(time.time() - start_time)
 
         point_dists = np.linalg.norm(radar_point[:2, :], ord = 2, axis=0)
@@ -479,6 +510,13 @@ if __name__ == "__main__":
             data["distance"] = distances[idx]
             corner = data["bev_box"]
 
+            if not (selected_point is None):
+                point_distance = np.linalg.norm(selected_point)
+                gt_distance = np.linalg.norm(gt_center[:2])
+                distance_error = np.abs(point_distance - gt_distance)
+                distance_errors[data["label"]].append(distance_error)
+                gt_error_data[data["label"]].append(gt_distance)
+
             for i_corner in range(4): # plot bev bbox
                 if data["distance"] is None: # not fused
                     plt.plot([-corner[1][i_corner], -corner[1][(i_corner+1)%4]], [corner[0][i_corner], corner[0][(i_corner+1)%4]], 'k-', c = (0, 0, 0), linewidth = 5)
@@ -487,7 +525,7 @@ if __name__ == "__main__":
             if selected_point is not None:
                 # plot radar point to bbox center
                 plt.plot([-gt_center[1], -selected_point[1]], [gt_center[0], selected_point[0]],'k-', c = [0, 0, 0.4, 1], linewidth = 1.5)
-
+        
         bev_im_buf = io.BytesIO()
         plt.savefig(bev_im_buf, format='jpg', bbox_inches='tight')
         bev_im = cv2.imdecode(np.frombuffer(bev_im_buf.getvalue(), dtype=np.uint8), 1)
@@ -502,9 +540,22 @@ if __name__ == "__main__":
         scene_videos[token_scene[token_index]].write(out_img)
         out_vid.write(out_img)
 
+    distance_error_array = []
+    for distance_error in distance_errors.values():
+        distance_error_array += distance_error
+
     print("Time calc distance : {}, max : {}, min : {}".format(np.mean(time_calc_distance), np.max(time_calc_distance), np.min(time_calc_distance)))
+    print("Distance error mean : {}, std : {}".format(np.mean(distance_error_array), np.std(distance_error_array)))
 
     for scene_index in range(scene_num):
         scene_name = nusc.scene[scene_index]["name"]
         scene_videos[scene_name].release()
     out_vid.release()
+
+    for class_name in class_names:
+        plt.clf()
+        plt.xlabel("Distance (Ground truth) [m]")
+        plt.ylabel("Distance error [m]")
+        plt.scatter(gt_error_data[class_name], distance_errors[class_name], s = 3)
+        print("{} : {}".format(class_name, np.corrcoef(gt_error_data[class_name], distance_errors[class_name])[0,1]))
+        plt.savefig("gt_distance_"+class_name+".jpg", format='jpg', bbox_inches='tight')

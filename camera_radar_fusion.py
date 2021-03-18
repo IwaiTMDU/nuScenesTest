@@ -1,5 +1,7 @@
 import numpy as np
 import copy
+from nuscenes.utils.data_classes import PointCloud
+from pyquaternion import Quaternion
 
 
 def radar_fusion_min_distance(annotation_data, radar_point):
@@ -19,6 +21,7 @@ def radar_fusion_min_distance(annotation_data, radar_point):
             selected_points[idx] = radar_point[:2,radar_indexes[selected_point_id]]
 
     return selected_point_ids, selected_points, distances
+
 
 def radar_fusion_cluster(annotation_data, radar_point):
     num_bbox = len(annotation_data)
@@ -67,4 +70,89 @@ def radar_fusion_cluster(annotation_data, radar_point):
 
             num_radar_points = len(radar_points_in_bboxes)
     
+    return selected_point_ids, selected_points, distances
+
+
+def radar_fusion_camera_to_bev(annotation_data, radar_point, nusc, token, heights):
+    num_bbox = len(annotation_data)
+    selected_point_ids = [None] * num_bbox
+    selected_points = [None] * num_bbox
+    distances = [None] * num_bbox
+
+    sample = nusc.get('sample', token)
+    camera_rec = nusc.get('sample_data', sample['data']["CAM_FRONT"])
+    radar_rec = nusc.get('sample_data', sample['data']["RADAR_FRONT"])
+    cs_record = nusc.get('calibrated_sensor', camera_rec['calibrated_sensor_token'])
+    camera_intrinsics = np.array(cs_record['camera_intrinsic'])
+    inv_intrinsics = np.linalg.inv(camera_intrinsics)
+
+    if len(annotation_data) == 0:
+        return selected_point_ids, selected_points, distances
+
+    centers = []
+    for data in annotation_data:
+        bbox = data["box"]
+        label = data["label"]
+        object_height = heights[label] # クラス毎に高さを変える
+
+        left_lower = np.array([bbox[0], bbox[3], 1]) # u, v, 1
+        left_upper = np.array([bbox[0], bbox[1], 1]) # u, v, 1
+        right_lower = np.array([bbox[2], bbox[3], 1]) # u, v, 1
+        left_lower_xyz = np.dot(inv_intrinsics, left_lower)
+        left_upper_xyz = np.dot(inv_intrinsics, left_upper)
+        right_lower_xyz = np.dot(inv_intrinsics, right_lower)
+        xyz_height = left_upper_xyz[1] - left_lower_xyz[1]
+        scale = np.abs(object_height / xyz_height)
+        low_center = scale * np.array([0.5*(right_lower_xyz[0] + left_lower_xyz[0]), left_lower_xyz[1], 1])[:,np.newaxis]
+        centers.append(low_center)
+    centers = np.concatenate(centers, axis=1)
+    pc = PointCloud(centers)
+    
+    # camera to world
+    pc.rotate(Quaternion(cs_record['rotation']).rotation_matrix)
+    pc.translate(np.array(cs_record['translation']))
+
+    # world to ego vehicle
+    poserecord = nusc.get('ego_pose', camera_rec['ego_pose_token'])
+    pc.rotate(Quaternion(poserecord['rotation']).rotation_matrix)
+    pc.translate(np.array(poserecord['translation']))
+
+    # egho vehicle to world
+    poserecord = nusc.get('ego_pose', radar_rec['ego_pose_token'])
+    pc.translate(-np.array(poserecord['translation']))
+    pc.rotate(Quaternion(poserecord['rotation']).rotation_matrix.T)
+
+    # world to radar
+    cs_record = nusc.get('calibrated_sensor', radar_rec['calibrated_sensor_token'])
+    pc.translate(-np.array(cs_record['translation']))
+    pc.rotate(Quaternion(cs_record['rotation']).rotation_matrix.T)
+
+    bev_points = pc.points[:2,:]
+    for idx, data in enumerate(annotation_data):
+        bev_point = bev_points[:, idx]
+        p2p_distances = np.square(radar_point[:2,:] - bev_point[:,np.newaxis]).sum(axis=0)
+        min_distance_idx = p2p_distances.argmin()
+        selected_point_ids[idx] = min_distance_idx
+        #selected_points[idx] = radar_point[:2,idx]
+        selected_points[idx] = bev_point
+        #distances[idx] = np.linalg.norm(radar_point[:2,idx], axis=0)
+        distances[idx] = np.linalg.norm(bev_point, axis=0)
+    
+    return selected_point_ids, selected_points, distances
+
+
+def fusion_bevxyz_and_radar_min(annotation_data, radar_point, nusc, token):
+    num_bbox = len(annotation_data)
+    selected_point_ids = [None] * num_bbox
+    selected_points = [None] * num_bbox
+    distances = [None] * num_bbox
+
+    radar_selected_ids, radar_selected_points, radar_distances = radar_fusion_min_distance(annotation_data, radar_point)
+    camera_selected_ids, camera_selected_points, camera_distances = radar_fusion_camera_to_bev(annotation_data, radar_point, nusc, token)
+
+    distances = [camera_distances[idx] if radar_distance is None else min(camera_distances[idx], radar_distances[idx]) for idx, radar_distance in enumerate(radar_distances)]
+    selected_points = [camera_selected_points[idx] if radar_distance is None else (camera_selected_points[idx] if np.argmin([camera_distances[idx], radar_distances[idx]]) == 0 else radar_selected_points[idx]) for idx, radar_distance in enumerate(radar_distances)]
+
+    selected_point_ids = radar_selected_ids
+
     return selected_point_ids, selected_points, distances
