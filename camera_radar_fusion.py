@@ -73,7 +73,7 @@ def radar_fusion_cluster(annotation_data, radar_point):
     return selected_point_ids, selected_points, distances
 
 
-def radar_fusion_camera_to_bev(annotation_data, radar_point, nusc, token, heights):
+def camera_to_bev(annotation_data, radar_point, nusc, token, heights):
     num_bbox = len(annotation_data)
     selected_point_ids = [None] * num_bbox
     selected_points = [None] * num_bbox
@@ -130,9 +130,9 @@ def radar_fusion_camera_to_bev(annotation_data, radar_point, nusc, token, height
     bev_points = pc.points[:2,:]
     for idx, data in enumerate(annotation_data):
         bev_point = bev_points[:, idx]
-        p2p_distances = np.square(radar_point[:2,:] - bev_point[:,np.newaxis]).sum(axis=0)
-        min_distance_idx = p2p_distances.argmin()
-        selected_point_ids[idx] = min_distance_idx
+        #p2p_distances = np.square(radar_point[:2,:] - bev_point[:,np.newaxis]).sum(axis=0)
+        #min_distance_idx = p2p_distances.argmin()
+        #selected_point_ids[idx] = min_distance_idx
         #selected_points[idx] = radar_point[:2,idx]
         selected_points[idx] = bev_point
         #distances[idx] = np.linalg.norm(radar_point[:2,idx], axis=0)
@@ -148,7 +148,7 @@ def fusion_bevxyz_and_radar_min(annotation_data, radar_point, nusc, token):
     distances = [None] * num_bbox
 
     radar_selected_ids, radar_selected_points, radar_distances = radar_fusion_min_distance(annotation_data, radar_point)
-    camera_selected_ids, camera_selected_points, camera_distances = radar_fusion_camera_to_bev(annotation_data, radar_point, nusc, token)
+    camera_selected_ids, camera_selected_points, camera_distances = camera_to_bev(annotation_data, radar_point, nusc, token)
 
     distances = [camera_distances[idx] if radar_distance is None else min(camera_distances[idx], radar_distances[idx]) for idx, radar_distance in enumerate(radar_distances)]
     selected_points = [camera_selected_points[idx] if radar_distance is None else (camera_selected_points[idx] if np.argmin([camera_distances[idx], radar_distances[idx]]) == 0 else radar_selected_points[idx]) for idx, radar_distance in enumerate(radar_distances)]

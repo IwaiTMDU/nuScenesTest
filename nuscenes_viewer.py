@@ -15,7 +15,7 @@ from pyquaternion import Quaternion
 import copy
 from nuscenes.utils.geometry_utils import BoxVisibility
 import time
-from camera_radar_fusion import radar_fusion_min_distance, radar_fusion_cluster, radar_fusion_camera_to_bev, fusion_bevxyz_and_radar_min
+from camera_radar_fusion import radar_fusion_min_distance, radar_fusion_cluster, camera_to_bev, fusion_bevxyz_and_radar_min
 
 
 version = "v1.0-mini"
@@ -161,7 +161,7 @@ def get_annotation_bbox(nusc, tokens):
                 else:
                     heights[box.name].append(height)
 
-                camera_bbox = box.box2d(camera_intrinsic)
+                camera_bbox = box.box2d(camera_intrinsic)# + np.random.randint(-10, 10, (4))
                 
                 bboxes.append({"label":box.name, "box":camera_bbox, "bev_box":bev_corners})
         annotations.append({"image_file":os.path.join(dataroot,camera_rec["filename"]), "annotations":bboxes})
@@ -493,8 +493,8 @@ if __name__ == "__main__":
         # fusion
         start_time = time.time()
         #selected_point_ids, selected_points, distances = radar_fusion_cluster(annotations[token_index]["annotations"], radar_point = radar_point)
-        #selected_point_ids, selected_points, distances = radar_fusion_min_distance(annotations[token_index]["annotations"], radar_point = radar_point)
-        selected_point_ids, selected_points, distances = radar_fusion_camera_to_bev(annotations[token_index]["annotations"], radar_point = radar_point, nusc = nusc, token = sample_tokens[token_index], heights = object_heights)
+        selected_point_ids, selected_points, distances = radar_fusion_min_distance(annotations[token_index]["annotations"], radar_point = radar_point)
+        #selected_point_ids, selected_points, distances = camera_to_bev(annotations[token_index]["annotations"], radar_point = radar_point, nusc = nusc, token = sample_tokens[token_index], heights = object_heights)
         #selected_point_ids, selected_points, distances = fusion_bevxyz_and_radar_min(annotations[token_index]["annotations"], radar_point = radar_point, nusc = nusc, token = sample_tokens[token_index])
         time_calc_distance.append(time.time() - start_time)
 
@@ -535,7 +535,7 @@ if __name__ == "__main__":
         bev_im = cv2.resize(bev_im, dsize=(round(asp*bev_im.shape[1]), cam_img.shape[0]))
         out_img = cv2.hconcat([cam_img, bev_im])
         cv2.imwrite(os.path.join(save_dir, str(token_index).zfill(4)+".jpg"), out_img)
-        
+              
         out_img = cv2.resize(out_img, out_vid_shape)
         scene_videos[token_scene[token_index]].write(out_img)
         out_vid.write(out_img)
